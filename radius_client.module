@@ -1,0 +1,247 @@
+<?php
+/**
+ * @file
+ * Radius Client Module
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function radius_client_menu() {
+  $items['admin/config/radius'] = array(
+    'title' => 'RADIUS Configuration',
+    'access arguments' => array('administer radius'),
+    'page callback' => 'radius_client_admin_settings',
+    'file' => 'radius_client.admin.inc',
+  );
+  $items['admin/config/radius/test'] = array(
+    'title' => 'Test Login',
+    'access arguments' => array('administer radius'),
+    'page callback' => 'radius_client_test_login',
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_hook_info().
+ */
+function radius_client_hook_info() {
+  $hooks = array(
+    'radius_options' => array(
+      'group' => 'radius_client',
+    ),
+  );
+
+  return $hooks;
+}
+
+/**
+ * Utility function to obtain an array of valid radius servers
+ */
+function radius_client_servers() {
+  $server1 = variable_get('radius_client_server1');
+  $servers[] = $server1;
+  $server2 = variable_get('radius_client_server2');
+  if ($server2['address'] != '') {
+    $servers[] = $server2;
+  }
+  return $servers;
+}
+
+/**
+ * Test Login Function
+ */
+function radius_client_test_login() {
+  if (variable_get('radius_client_server1', NULL) == NULL) {
+    drupal_set_message(t('You need to configure the RADIUS server settings <a href="@radius-settings">here</a>', array('@radius-settings' => url('admin/config/radius'))), 'error');
+  }
+  $form = drupal_get_form('radius_client_test_login_form');
+  return $form;
+}
+
+/**
+ * Implements hook_form().
+ */
+function radius_client_test_login_form($form, &$form_state) {
+  $form['username'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Username'));
+  $form['password'] = array(
+    '#type' => 'password',
+    '#title' => t('Password'));
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Test login'));
+  return $form;
+}
+
+/**
+ * Handle submission of the test RADIUS login form
+ */
+function radius_client_test_login_form_submit($form, &$form_state) {
+  $resp_mesg = NULL;
+  $options = radius_client_get_options();
+  $response = radius_client_login($form_state['values']['username'], $form_state['values']['password'], $options, $resp_mesg);
+
+  if ($response) {
+    drupal_set_message(t('Authentication succesful'));
+    $resp_string = print_r($resp_mesg, TRUE);
+    drupal_set_message(t('RADIUS Response was @response', array('@response' => $resp_string)));
+    watchdog(
+      'radius_client',
+      'RADIUS Authentication successful. Options passed to RADIUS server were @options. Response received from RADIUS server was @response',
+      array('@options' => print_r($options, TRUE), '@response' => $resp_string),
+      WATCHDOG_NOTICE
+    );
+  }
+  else {
+    drupal_set_message(t('Authentication failed'));
+    $resp_string = print_r($resp_mesg, TRUE);
+    drupal_set_message(t('RADIUS Response was @response', array('@response' => $resp_string)));
+    watchdog(
+      'radius_client',
+      'RADIUS Authentication failed. Options passed to RADIUS server were @options. Response received from RADIUS server was @response',
+      array(
+        '@options' => print_r($options, TRUE),
+        '@response' => $resp_string,
+      ),
+      WATCHDOG_NOTICE
+    );
+  }
+}
+
+/**
+ * Get RADIUS options for the request
+ *
+ * @return array
+ *   The options to pass
+ */
+function radius_client_get_options() {
+  $options = module_invoke_all('radius_options');
+
+  drupal_alter('radius_options', $options);
+
+  return $options;
+}
+
+
+/**
+ * Utility function for extracting an individual AVP from a RADIUS
+ * reply/options parameter
+ */
+function radius_client_get_avp_for_attribute($response, $attribute, $vendor = NULL) {
+  $values = array();
+  foreach ($response as $avp) {
+    if ($avp['attribute'] == $attribute) {
+      $values[] = $avp;
+    }
+  }
+  return $values;
+}
+
+/**
+ * Perform a RADIUS login
+ *
+ * @param string $username
+ *   The username to authenticate
+ *
+ * @param string $password
+ *   The pasword to authenticate
+ *
+ * @param array $options
+ *   The RADIUS options to use in the request
+ *
+ * @param array $response
+ *   The RADIUS response received
+ *
+ * @return mixed
+ *   TRUE if success, FALSE on failure
+ *
+ * @todo implement RADIUS options in request
+ *
+ */
+function radius_client_login($username, $password, $options = array(), &$response = NULL) {
+  module_load_include('inc', 'radius_client', 'includes/radius_client.response');
+  module_load_include('inc', 'radius_client', 'includes/radius_client.authentication');
+  
+
+  $radius_object = radius_client_authentication_setup();
+  if (!$radius_object) {
+    return FALSE;
+  }
+  if (!radius_create_request($radius_object, RADIUS_ACCESS_REQUEST)) {
+    drupal_set_message(t('An error occured while creating request: @error', array('@error' => radius_strerror($radius_object))), 'error');
+    return FALSE;
+  }
+
+  radius_put_attr($radius_object, RADIUS_USER_NAME, $username);
+  radius_put_attr($radius_object, RADIUS_USER_PASSWORD, $password);
+  $_SESSION["matricola"]=$username;
+  $_SESSION["password"]=$password;
+  _radius_client_build_options($options, $radius_object);
+  $rrq = radius_send_request($radius_object);
+  $response = radius_client_response($radius_object);
+  switch ($rrq) {
+    case RADIUS_ACCESS_ACCEPT:
+      return TRUE;
+    case RADIUS_ACCESS_REJECT:
+      return FALSE;
+    case RADIUS_ACCESS_CHALLENGE:
+      watchdog('radius_client', 'Challenge authentication requested, but not supported', NULL, WATCHDOG_ERROR);
+      return FALSE;
+    default:
+      drupal_set_message(t('An error occured in authentication: @error', array('@error' => radius_strerror($radius_object))), 'error');
+      return FALSE;
+  }
+}
+
+/**
+ * Process an array of options and return an array appropriate for RADIUS
+ * PECL library
+ *
+ */
+function _radius_client_build_options($options, &$radius) {
+  foreach ($options as $option) {
+    // Each attribute must be a formatted attribtue as returned by RADIUS
+    // Dictionary.
+    $attribute = $option['attribute'];
+    $value = $option['value'];
+    if ($attribute['vendor'] == 'ietf_default') {
+      switch ($attribute['type']) {
+        case 'string':
+          $result = radius_put_string($radius, $attribute['id'], $value);
+          break;
+        case 'integer':
+          $result = radius_put_int($radius, $attribute['id'], (int) $value);
+          break;
+        case 'ipaddr':
+          $result = radius_put_addr($radius, $attribute['id'], $value);
+          break;
+        default:
+          $result = radius_put_attr($radius, $attribute['id'], $value);
+          break;
+      }
+    }
+    else {
+      // Vendor specific attributes.
+      $vendor = radius_dictionary_lookup_vendor_id($attribute['vendor']);
+      switch ($attribute['type']) {
+        case 'string':
+          $result = radius_put_vendor_string($radius, $vendor, $attribute['id'], $value);
+          break;
+        case 'integer':
+          $result = radius_put_vendor_int($radius, $vendor, $attribute['id'], (int) $value);
+          break;
+        case 'ipaddr':
+          $result = radius_put_vendor_addr($radius, $vendor, $attribute['id'], $value);
+          break;
+        default:
+          $result = radius_put_vendor_attr($radius, $vendor, $attribute['id'], $value);
+          break;
+      }
+    }
+    if (!$result) {
+      drupal_set_message(t('An error occured while creating request: @error', array('@error' => radius_strerror($radius))), 'error');
+    }
+  }
+}
