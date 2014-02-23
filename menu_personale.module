@@ -1,0 +1,287 @@
+<?php
+
+/* Funzione principale del modulo che permette la chiamata alle UniService API */
+function CallAPI($method, $url, $data = false)
+{
+    $curl = curl_init($url);
+
+    switch ($method)
+    {
+        case "POST":
+            curl_setopt($curl, CURLOPT_POST, 1);
+			
+			//questa opzione permette di riceve l'output e quindi di stamparlo nel modulo
+			curl_setopt($curl,CURLOPT_RETURNTRANSFER,1);
+
+            if ($data)
+                curl_setopt($curl, CURLOPT_POSTFIELDS, $data);
+            break;
+			
+        case "PUT":
+            curl_setopt($curl, CURLOPT_PUT, 1);
+            break;
+        default:
+            if ($data)
+                $url = sprintf("%s?%s", $url, http_build_query($data));
+    }
+
+
+    return curl_exec($curl);
+}
+
+function menu_personale_menu() {
+ 
+  $items['serv_uniparth/menu_personale'] = array(
+   
+    'title' => 'Menu Servizi UniParthenope',
+
+
+    'description' => 'prova descrizione',
+
+    /* Questa funzione viene richiamata quando si clicca sulla voce principale di Menù */
+    'page callback' => '_menu_personale_basic_instructions',
+
+   
+	/* Contenuto della pagina inziale del modulo */
+    'page arguments' => array(t('&Egrave possibile visualizzare le informazioni offerte dai Servizi Web Uniparthenope direttamente dal menù.')),
+	
+	/* Abilito le chiamate alle funzioni */
+    'access callback' => TRUE,
+
+
+	/* Pre-imposto l'espansione del menù */
+    'expanded' => TRUE,
+  );
+
+
+
+
+
+/* Queste sono le voci del menù
+ * e nella voce callback troviamo la funzione hook che va richiamata
+ * 
+ *  */
+
+  $items['serv_uniparth/menu_personale/custom_access'] = array(
+    'title' => 'Esami Sostenuti',
+     'page callback' => '_menu_personale_menu_page',
+    'page arguments' => array(t('&Egrave possibile visualizzare gli esami sostenuti <br> ')),
+    'access callback' => TRUE,
+    'expanded' => TRUE,
+    'weight' => -5,
+  );
+  
+
+ $items['serv_uniparth/menu_personale/custom_access2'] = array(
+    'title' => 'Esami Prenotati',
+     'page callback' => '_menu_personale_exam_pren',
+    'page arguments' => array(t('Elenco degli esami prenotati : ')),
+    'access callback' => TRUE,
+    'expanded' => TRUE,
+    'weight' => -5,
+  );
+  
+ $items['serv_uniparth/menu_personale/custom_access3'] = array(
+    'title' => 'Esami Prenotabili',
+     'page callback' => '_menu_personale_exam_prenotabili',
+    'page arguments' => array(t('Elenco degli esami prenotabili :<br>')),
+    'access callback' => TRUE,
+    'expanded' => TRUE,
+    'weight' => -5,
+  );
+
+ $items['serv_uniparth/menu_personale/custom_access4'] = array(
+    'title' => 'Piano di Studi',
+     'page callback' => '_menu_personale_study_plan',
+    'page arguments' => array(t('Piano di studi : <br>')),
+    'access callback' => TRUE,
+    'expanded' => TRUE,
+    'weight' => -5,
+  );
+
+
+
+  return $items;
+}
+
+/* funzioni hook */
+function _menu_personale_basic_instructions($content = NULL) {
+			
+ $output =  '<div>' .  '</div>';
+ 
+	if(isset($_SESSION["password"])){
+		/* Richiamo la funzione CallAPI per prelevare i dati personali dalle API */
+		$matricola=$_SESSION["matricola"];
+		$password=$_SESSION["password"];
+		$sito="https://api.uniparthenope.it/UniService/$matricola/personaldata?password=$password";
+
+		$data=array("password"=>$password);
+		$result=CallAPI("POST", $sito,$data);
+		$data=json_decode($result);
+		$control=$data->CODE;
+		if ($control==402) {
+			$output.=$data->MESSAGE;
+		}
+		elseif ($control==200) {
+			$name=$data->NAME;
+			$surname=$data->SURNAME;
+			$output.="Benvenuto ".$name."	".$surname;
+		}		
+	}
+	else{
+		$output.="Effettua l'accesso con le credenziali Servizi Web<br>";
+	}
+	
+  $base_content = t($output);
+  return '<div>' . $base_content . '</div><br /><div>' . $content . '</div>';
+}
+
+
+function _menu_personale_menu_page($content = NULL) {
+  $output =  '<div>' . $content . '</div>';
+  
+  if(isset($_SESSION["matricola"])){
+  	
+	/* Impostazioni delle varabili locali uguali a quelle globali */
+  	$matricola=$_SESSION["matricola"];
+	  $password=$_SESSION["password"];
+	$sito="https://api.uniparthenope.it/UniService/$matricola/exams/given?password=$password";
+	$dati=array("password"=>$password);
+	
+	/* Invoco l'api tramite funzione dichiarata all'inizio */
+	$result=CallAPI("POST", $sito,$dati);
+	$data=json_decode($result);
+	$control1=$data->CODE;
+		$i=0;
+		/* Adesso c'è un controllo del risultato dell'api */
+		/* in caso di fallimento , poichè la api in questione ritorna 600 in caso di fallimento */
+	if ($control1==600) {
+		$output.=$data->MESSAGE;
+	}
+	/* In caso di successo poichè la api in questione ritorna 200 in caso di sucesso */
+	elseif ($control1==200) {
+	
+		foreach ($data->EXAMS_LIST as $esame) {
+			$output.=$esame->EXAM_NAME."<br>";
+		$i++;
+		}
+	}
+
+  }
+  else {
+      $output.="non hai effettuato l'accesso<br>";
+  }
+
+  
+  return $output;
+}
+
+/* Function di callback che restuisce gli esami prenotati */
+
+function _menu_personale_exam_pren($content = NULL) {
+  $output =  '<div>' . $content . '</div>';
+  
+  /* Se è stato effettuato il login allora si procede con l'elaborazione della richiesta */
+  if(isset($_SESSION["matricola"])){
+  	$matricola=$_SESSION["matricola"];
+	  $password=$_SESSION["password"];
+	$sito="https://api.uniparthenope.it/UniService/$matricola/exams/booked?password=$password";
+	$dati=array("password"=>$password);
+	
+	$result=CallAPI("POST", $sito,$dati);
+	$data=json_decode($result);
+	
+	// Accedo alla variabile CODE e associo a $control1 il valore di CODE per controllare se ci sono esami prenotati
+	$control1=$data->CODE;
+	$i=0;
+	 if ($control1==600) {
+	 	/* Se non ci sono esami allora metto in output il valore della variabile MESSAGE */
+		 $output.=$data->MESSAGE;
+	 }
+	 else if ($control1==200)
+		 {
+		 	/* Utilizzo il ciclo foreach per scalare nell'array */
+		 	foreach ($data->EXAMS_LIST as $esame) {
+		 		/* Assegno come output le informazioni dell'esame */
+				 $output.=$esame->TEACHING."<br>";
+				$i++;
+			 }
+		
+	 }
+
+  }
+  else {
+      $output.="non hai effettuato l'accesso<br>";
+  }
+
+  
+  return $output;
+}
+
+function _menu_personale_exam_prenotabili($content = NULL) {
+  $output =  '<div>' . $content . '</div>';
+  
+  if(isset($_SESSION["matricola"])){
+  	$matricola=$_SESSION["matricola"];
+	  $password=$_SESSION["password"];
+	$sito="https://api.uniparthenope.it/UniService/$matricola/exams/booking?password=$password";
+	$dati=array("password"=>$password);
+	
+	$result=CallAPI("POST", $sito,$dati);
+	$data=json_decode($result);
+	$control1=$data->CODE;
+	
+	/* La variabile i è usata come indice dell'esame */
+	$i=0;
+	if ($control1==600) {
+		$output.=$data->MESSAGE;
+	}
+	elseif ($control1==200) {
+		foreach ($data->EXAM_LIST as $esame) {
+			/* utilizzo la nuova variabile esame e poi accedo al valore */
+			$output.=$esame->EXAM."<br>";
+			$i++;
+		}
+	}
+  }
+  else
+{
+      $output.="non hai effettuato l'accesso<br>";
+  }
+
+  
+  return $output;
+}
+
+function _menu_personale_study_plan($content = NULL) {
+  $output =  '<div>' . $content . '</div>';
+  
+  if(isset($_SESSION["matricola"])){
+  	
+	/* Impostazioni delle varabili locali uguali a quelle globali */
+  	$matricola=$_SESSION["matricola"];
+	  $password=$_SESSION["password"];
+	$sito="https://api.uniparthenope.it/UniService/$matricola/studyplan?password=$password";
+	$dati=array("password"=>$password);
+	
+	/* Invoco l'api tramite funzione dichiarata all'inizio */
+	$result=CallAPI("POST", $sito,$dati);
+	$data=json_decode($result);
+	$i=0;
+	foreach ($data->EXAMS_LIST as $esame) {
+		$output.=$esame->TEACHING."<br>";
+		$i++;
+	}
+
+  }
+  else {
+      $output.="non hai effettuato l'accesso<br>";
+  }
+
+  
+  return $output;
+}
+
+
+
+
