@@ -1,0 +1,4 @@
+name = Menu personale Studenti UniParthenope
+description = Questo menù permette di visualizzare , gli esami sostenuti, da sostenere, il piano di studi
+project = "menu_personale"
+core = 7.x
